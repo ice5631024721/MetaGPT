@@ -10,14 +10,13 @@ ref3: https://github.com/Significant-Gravitas/Auto-GPT/blob/master/autogpt/llm/t
 ref4: https://github.com/hwchase17/langchain/blob/master/langchain/chat_models/openai.py
 ref5: https://ai.google.dev/models/gemini
 """
+import anthropic
 import tiktoken
-from openai.types import CompletionUsage
-from openai.types.chat import ChatCompletionChunk
 
 from metagpt.logs import logger
-from metagpt.utils.ahttp_client import apost
 
 TOKEN_COSTS = {
+    "anthropic/claude-3.5-sonnet": {"prompt": 0.003, "completion": 0.015},
     "gpt-3.5-turbo": {"prompt": 0.0015, "completion": 0.002},
     "gpt-3.5-turbo-0301": {"prompt": 0.0015, "completion": 0.002},
     "gpt-3.5-turbo-0613": {"prompt": 0.0015, "completion": 0.002},
@@ -41,11 +40,21 @@ TOKEN_COSTS = {
     "gpt-4-1106-vision-preview": {"prompt": 0.01, "completion": 0.03},
     "gpt-4o": {"prompt": 0.005, "completion": 0.015},
     "gpt-4o-mini": {"prompt": 0.00015, "completion": 0.0006},
+    "gpt-4o-mini-2024-07-18": {"prompt": 0.00015, "completion": 0.0006},
     "gpt-4o-2024-05-13": {"prompt": 0.005, "completion": 0.015},
+    "gpt-4o-2024-08-06": {"prompt": 0.0025, "completion": 0.01},
+    "o1-preview": {"prompt": 0.015, "completion": 0.06},
+    "o1-preview-2024-09-12": {"prompt": 0.015, "completion": 0.06},
+    "o1-mini": {"prompt": 0.003, "completion": 0.012},
+    "o1-mini-2024-09-12": {"prompt": 0.003, "completion": 0.012},
     "text-embedding-ada-002": {"prompt": 0.0004, "completion": 0.0},
     "glm-3-turbo": {"prompt": 0.0007, "completion": 0.0007},  # 128k version, prompt + completion tokens=0.005￥/k-tokens
     "glm-4": {"prompt": 0.014, "completion": 0.014},  # 128k version, prompt + completion tokens=0.1￥/k-tokens
-    "gemini-pro": {"prompt": 0.00025, "completion": 0.0005},
+    "glm-4-flash": {"prompt": 0, "completion": 0},
+    "glm-4-plus": {"prompt": 0.007, "completion": 0.007},
+    "gemini-1.5-flash": {"prompt": 0.000075, "completion": 0.0003},
+    "gemini-1.5-pro": {"prompt": 0.0035, "completion": 0.0105},
+    "gemini-1.0-pro": {"prompt": 0.0005, "completion": 0.0015},
     "moonshot-v1-8k": {"prompt": 0.012, "completion": 0.012},  # prompt + completion tokens=0.012￥/k-tokens
     "moonshot-v1-32k": {"prompt": 0.024, "completion": 0.024},
     "moonshot-v1-128k": {"prompt": 0.06, "completion": 0.06},
@@ -58,26 +67,50 @@ TOKEN_COSTS = {
     "claude-2.0": {"prompt": 0.008, "completion": 0.024},
     "claude-2.1": {"prompt": 0.008, "completion": 0.024},
     "claude-3-sonnet-20240229": {"prompt": 0.003, "completion": 0.015},
+    "claude-3-5-sonnet": {"prompt": 0.003, "completion": 0.015},
+    "claude-3-5-sonnet-v2": {"prompt": 0.003, "completion": 0.015},  # alias of newer 3.5 sonnet
     "claude-3-5-sonnet-20240620": {"prompt": 0.003, "completion": 0.015},
     "claude-3-opus-20240229": {"prompt": 0.015, "completion": 0.075},
     "claude-3-haiku-20240307": {"prompt": 0.00025, "completion": 0.00125},
+    "claude-3-7-sonnet-20250219": {"prompt": 0.003, "completion": 0.015},
     "yi-34b-chat-0205": {"prompt": 0.0003, "completion": 0.0003},
     "yi-34b-chat-200k": {"prompt": 0.0017, "completion": 0.0017},
+    "openai/gpt-4": {"prompt": 0.03, "completion": 0.06},  # start, for openrouter
+    "openai/gpt-4-turbo": {"prompt": 0.01, "completion": 0.03},
+    "openai/gpt-4o": {"prompt": 0.005, "completion": 0.015},
+    "openai/gpt-4o-2024-05-13": {"prompt": 0.005, "completion": 0.015},
+    "openai/gpt-4o-mini": {"prompt": 0.00015, "completion": 0.0006},
+    "openai/gpt-4o-mini-2024-07-18": {"prompt": 0.00015, "completion": 0.0006},
+    "google/gemini-flash-1.5": {"prompt": 0.00025, "completion": 0.00075},
+    "deepseek/deepseek-coder": {"prompt": 0.00014, "completion": 0.00028},
+    "deepseek/deepseek-chat": {"prompt": 0.00014, "completion": 0.00028},  # end, for openrouter
     "yi-large": {"prompt": 0.0028, "completion": 0.0028},
     "microsoft/wizardlm-2-8x22b": {"prompt": 0.00108, "completion": 0.00108},  # for openrouter, start
     "meta-llama/llama-3-70b-instruct": {"prompt": 0.008, "completion": 0.008},
     "llama3-70b-8192": {"prompt": 0.0059, "completion": 0.0079},
     "openai/gpt-3.5-turbo-0125": {"prompt": 0.0005, "completion": 0.0015},
     "openai/gpt-4-turbo-preview": {"prompt": 0.01, "completion": 0.03},
-    "deepseek-chat": {"prompt": 0.00014, "completion": 0.00028},
-    "deepseek-coder": {"prompt": 0.00014, "completion": 0.00028},
+    "openai/o1-preview": {"prompt": 0.015, "completion": 0.06},
+    "openai/o1-mini": {"prompt": 0.003, "completion": 0.012},
+    "anthropic/claude-3-opus": {"prompt": 0.015, "completion": 0.075},
+    "anthropic.claude-3-5-sonnet-20241022-v2:0": {"prompt": 0.003, "completion": 0.015},
+    "us.anthropic.claude-3-5-sonnet-20241022-v2:0": {"prompt": 0.003, "completion": 0.015},
+    "anthropic/claude-3.7-sonnet": {"prompt": 0.003, "completion": 0.015},
+    "anthropic/claude-3.7-sonnet:beta": {"prompt": 0.003, "completion": 0.015},
+    "anthropic/claude-3.7-sonnet:thinking": {"prompt": 0.003, "completion": 0.015},
+    "anthropic.claude-3-7-sonnet-20250219-v1:0": {"prompt": 0.003, "completion": 0.015},
+    "us.anthropic.claude-3-7-sonnet-20250219-v1:0": {"prompt": 0.003, "completion": 0.015},
+    "google/gemini-pro-1.5": {"prompt": 0.0025, "completion": 0.0075},  # for openrouter, end
+    "deepseek-chat": {"prompt": 0.00027, "completion": 0.0011},
+    "deepseek-coder": {"prompt": 0.00027, "completion": 0.0011},
+    "deepseek-reasoner": {"prompt": 0.00055, "completion": 0.0022},
     # For ark model https://www.volcengine.com/docs/82379/1099320
-    "doubao-lite-4k-240515": {"prompt": 0.000042, "completion": 0.000084},
-    "doubao-lite-32k-240515": {"prompt": 0.000042, "completion": 0.000084},
-    "doubao-lite-128k-240515": {"prompt": 0.00011, "completion": 0.00013},
-    "doubao-pro-4k-240515": {"prompt": 0.00011, "completion": 0.00028},
-    "doubao-pro-32k-240515": {"prompt": 0.00011, "completion": 0.00028},
-    "doubao-pro-128k-240515": {"prompt": 0.0007, "completion": 0.0012},
+    "doubao-lite-4k-240515": {"prompt": 0.000043, "completion": 0.000086},
+    "doubao-lite-32k-240515": {"prompt": 0.000043, "completion": 0.000086},
+    "doubao-lite-128k-240515": {"prompt": 0.00011, "completion": 0.00014},
+    "doubao-pro-4k-240515": {"prompt": 0.00011, "completion": 0.00029},
+    "doubao-pro-32k-240515": {"prompt": 0.00011, "completion": 0.00029},
+    "doubao-pro-128k-240515": {"prompt": 0.0007, "completion": 0.0013},
     "llama3-70b-llama3-70b-instruct": {"prompt": 0.0, "completion": 0.0},
     "llama3-8b-llama3-8b-instruct": {"prompt": 0.0, "completion": 0.0},
 }
@@ -138,8 +171,17 @@ QIANFAN_ENDPOINT_TOKEN_COSTS = {
 """
 DashScope Token price https://help.aliyun.com/zh/dashscope/developer-reference/tongyi-thousand-questions-metering-and-billing
 Different model has different detail page. Attention, some model are free for a limited time.
+Some new model published by Alibaba will be prioritized to be released on the Model Studio instead of the Dashscope.
+Token price on Model Studio shows on https://help.aliyun.com/zh/model-studio/getting-started/models#ced16cb6cdfsy
 """
 DASHSCOPE_TOKEN_COSTS = {
+    "qwen2.5-72b-instruct": {"prompt": 0.00057, "completion": 0.0017},  # per 1k tokens
+    "qwen2.5-32b-instruct": {"prompt": 0.0005, "completion": 0.001},
+    "qwen2.5-14b-instruct": {"prompt": 0.00029, "completion": 0.00086},
+    "qwen2.5-7b-instruct": {"prompt": 0.00014, "completion": 0.00029},
+    "qwen2.5-3b-instruct": {"prompt": 0.0, "completion": 0.0},
+    "qwen2.5-1.5b-instruct": {"prompt": 0.0, "completion": 0.0},
+    "qwen2.5-0.5b-instruct": {"prompt": 0.0, "completion": 0.0},
     "qwen2-72b-instruct": {"prompt": 0.000714, "completion": 0.001428},
     "qwen2-57b-a14b-instruct": {"prompt": 0.0005, "completion": 0.001},
     "qwen2-7b-instruct": {"prompt": 0.000143, "completion": 0.000286},
@@ -190,16 +232,24 @@ FIREWORKS_GRADE_TOKEN_COSTS = {
 
 # https://console.volcengine.com/ark/region:ark+cn-beijing/model
 DOUBAO_TOKEN_COSTS = {
-    "doubao-lite": {"prompt": 0.0003, "completion": 0.0006},
-    "doubao-lite-128k": {"prompt": 0.0008, "completion": 0.0010},
-    "doubao-pro": {"prompt": 0.0008, "completion": 0.0020},
-    "doubao-pro-128k": {"prompt": 0.0050, "completion": 0.0090},
+    "doubao-lite": {"prompt": 0.000043, "completion": 0.000086},
+    "doubao-lite-128k": {"prompt": 0.00011, "completion": 0.00014},
+    "doubao-pro": {"prompt": 0.00011, "completion": 0.00029},
+    "doubao-pro-128k": {"prompt": 0.00071, "completion": 0.0013},
+    "doubao-pro-256k": {"prompt": 0.00071, "completion": 0.0013},
 }
 
 # https://platform.openai.com/docs/models/gpt-4-and-gpt-4-turbo
 TOKEN_MAX = {
-    "gpt-4o-2024-05-13": 128000,
+    "o1-preview": 128000,
+    "o1-preview-2024-09-12": 128000,
+    "o1-mini": 128000,
+    "o1-mini-2024-09-12": 128000,
     "gpt-4o": 128000,
+    "gpt-4o-2024-05-13": 128000,
+    "gpt-4o-2024-08-06": 128000,
+    "gpt-4o-mini-2024-07-18": 128000,
+    "gpt-4o-mini": 128000,
     "gpt-4-turbo-2024-04-09": 128000,
     "gpt-4-0125-preview": 128000,
     "gpt-4-turbo-preview": 128000,
@@ -211,7 +261,6 @@ TOKEN_MAX = {
     "gpt-4-0613": 8192,
     "gpt-4-32k": 32768,
     "gpt-4-32k-0613": 32768,
-    "gpt-4o-mini": 128000,
     "gpt-3.5-turbo-0125": 16385,
     "gpt-3.5-turbo": 16385,
     "gpt-3.5-turbo-1106": 16385,
@@ -222,7 +271,9 @@ TOKEN_MAX = {
     "text-embedding-ada-002": 8192,
     "glm-3-turbo": 128000,
     "glm-4": 128000,
-    "gemini-pro": 32768,
+    "gemini-1.5-flash": 1000000,
+    "gemini-1.5-pro": 2000000,
+    "gemini-1.0-pro": 32000,
     "moonshot-v1-8k": 8192,
     "moonshot-v1-32k": 32768,
     "moonshot-v1-128k": 128000,
@@ -240,14 +291,29 @@ TOKEN_MAX = {
     "claude-3-haiku-20240307": 200000,
     "yi-34b-chat-0205": 4000,
     "yi-34b-chat-200k": 200000,
+    "openai/gpt-4": 8192,  # start, for openrouter
+    "openai/gpt-4-turbo": 128000,
+    "openai/gpt-4o": 128000,
+    "openai/gpt-4o-2024-05-13": 128000,
+    "openai/gpt-4o-mini": 128000,
+    "openai/gpt-4o-mini-2024-07-18": 128000,
+    "google/gemini-flash-1.5": 2800000,
+    "deepseek/deepseek-coder": 128000,
+    "deepseek/deepseek-chat": 128000,  # end, for openrouter
+    "deepseek-chat": 128000,
+    "deepseek-coder": 128000,
+    "deepseek-ai/DeepSeek-Coder-V2-Instruct": 32000,  # siliconflow
     "yi-large": 16385,
     "microsoft/wizardlm-2-8x22b": 65536,
     "meta-llama/llama-3-70b-instruct": 8192,
     "llama3-70b-8192": 8192,
     "openai/gpt-3.5-turbo-0125": 16385,
     "openai/gpt-4-turbo-preview": 128000,
-    "deepseek-chat": 32768,
-    "deepseek-coder": 16385,
+    "openai/o1-preview": 128000,
+    "openai/o1-mini": 128000,
+    "anthropic/claude-3-opus": 200000,
+    "anthropic/claude-3.5-sonnet": 200000,
+    "google/gemini-pro-1.5": 4000000,
     "doubao-lite-4k-240515": 4000,
     "doubao-lite-32k-240515": 32000,
     "doubao-lite-128k-240515": 128000,
@@ -255,6 +321,13 @@ TOKEN_MAX = {
     "doubao-pro-32k-240515": 32000,
     "doubao-pro-128k-240515": 128000,
     # Qwen https://help.aliyun.com/zh/dashscope/developer-reference/tongyi-qianwen-7b-14b-72b-api-detailes?spm=a2c4g.11186623.0.i20
+    "qwen2.5-72b-instruct": 131072,
+    "qwen2.5-32b-instruct": 131072,
+    "qwen2.5-14b-instruct": 131072,
+    "qwen2.5-7b-instruct": 131072,
+    "qwen2.5-3b-instruct": 32768,
+    "qwen2.5-1.5b-instruct": 32768,
+    "qwen2.5-0.5b-instruct": 32768,
     "qwen2-57b-a14b-instruct": 32768,
     "qwen2-72b-instruct": 131072,
     "qwen2-7b-instruct": 32768,
@@ -300,6 +373,10 @@ BEDROCK_TOKEN_COSTS = {
     "anthropic.claude-3-haiku-20240307-v1:0:200k": {"prompt": 0.00025, "completion": 0.00125},
     # currently (2024-4-29) only available at US West (Oregon) AWS Region.
     "anthropic.claude-3-opus-20240229-v1:0": {"prompt": 0.015, "completion": 0.075},
+    "anthropic.claude-3-5-sonnet-20241022-v2:0": {"prompt": 0.003, "completion": 0.015},
+    "us.anthropic.claude-3-5-sonnet-20241022-v2:0": {"prompt": 0.003, "completion": 0.015},
+    "anthropic.claude-3-7-sonnet-20250219-v1:0": {"prompt": 0.003, "completion": 0.015},
+    "us.anthropic.claude-3-7-sonnet-20250219-v1:0": {"prompt": 0.003, "completion": 0.015},
     "cohere.command-text-v14": {"prompt": 0.0015, "completion": 0.0015},
     "cohere.command-text-v14:7:4k": {"prompt": 0.0015, "completion": 0.0015},
     "cohere.command-light-text-v14": {"prompt": 0.0003, "completion": 0.0003},
@@ -332,8 +409,25 @@ SPARK_TOKENS = {
 }
 
 
-def count_input_tokens(messages, model="gpt-3.5-turbo-0125"):
+def count_claude_message_tokens(messages: list[dict], model: str) -> int:
+    # rough estimation for models newer than claude-2.1, needs api_key or auth_token
+    ac = anthropic.Client()
+    system_prompt = ""
+    new_messages = []
+    for msg in messages:
+        if msg.get("role") == "system":
+            system_prompt = msg.get("content")
+        else:
+            new_messages.append(msg)
+    num_tokens = ac.beta.messages.count_tokens(messages=new_messages, model=model, system=system_prompt)
+    return num_tokens.input_tokens
+
+
+def count_message_tokens(messages, model="gpt-3.5-turbo-0125"):
     """Return the number of tokens used by a list of messages."""
+    if "claude" in model:
+        num_tokens = count_claude_message_tokens(messages, model)
+        return num_tokens
     try:
         encoding = tiktoken.encoding_for_model(model)
     except KeyError:
@@ -354,12 +448,19 @@ def count_input_tokens(messages, model="gpt-3.5-turbo-0125"):
         "gpt-4-turbo",
         "gpt-4-turbo-preview",
         "gpt-4-0125-preview",
+        "gpt-4-1106-preview",
         "gpt-4-turbo",
         "gpt-4-vision-preview",
         "gpt-4-1106-vision-preview",
         "gpt-4o",
         "gpt-4o-2024-05-13",
+        "gpt-4o-2024-08-06",
         "gpt-4o-mini",
+        "gpt-4o-mini-2024-07-18",
+        "o1-preview",
+        "o1-preview-2024-09-12",
+        "o1-mini",
+        "o1-mini-2024-09-12",
     }:
         tokens_per_message = 3  # # every reply is primed with <|start|>assistant<|message|>
         tokens_per_name = 1
@@ -368,10 +469,10 @@ def count_input_tokens(messages, model="gpt-3.5-turbo-0125"):
         tokens_per_name = -1  # if there's a name, the role is omitted
     elif "gpt-3.5-turbo" == model:
         logger.info("Warning: gpt-3.5-turbo may update over time. Returning num tokens assuming gpt-3.5-turbo-0125.")
-        return count_input_tokens(messages, model="gpt-3.5-turbo-0125")
+        return count_message_tokens(messages, model="gpt-3.5-turbo-0125")
     elif "gpt-4" == model:
         logger.info("Warning: gpt-4 may update over time. Returning num tokens assuming gpt-4-0613.")
-        return count_input_tokens(messages, model="gpt-4-0613")
+        return count_message_tokens(messages, model="gpt-4-0613")
     elif "open-llm-model" == model:
         """
         For self-hosted open_llm api, they include lots of different models. The message tokens calculation is
@@ -413,6 +514,10 @@ def count_output_tokens(string: str, model: str) -> int:
     Returns:
         int: The number of tokens in the text string.
     """
+    if "claude" in model:
+        messages = [{"role": "assistant", "content": string}]
+        num_tokens = count_claude_message_tokens(messages, model)
+        return num_tokens
     try:
         encoding = tiktoken.encoding_for_model(model)
     except KeyError:
@@ -433,16 +538,4 @@ def get_max_completion_tokens(messages: list[dict], model: str, default: int) ->
     """
     if model not in TOKEN_MAX:
         return default
-    return TOKEN_MAX[model] - count_input_tokens(messages) - 1
-
-
-async def get_openrouter_tokens(chunk: ChatCompletionChunk) -> CompletionUsage:
-    """refs to https://openrouter.ai/docs#querying-cost-and-stats"""
-    url = f"https://openrouter.ai/api/v1/generation?id={chunk.id}"
-    resp = await apost(url=url, as_json=True)
-    tokens_prompt = resp.get("tokens_prompt", 0)
-    completion_tokens = resp.get("tokens_completion", 0)
-    usage = CompletionUsage(
-        prompt_tokens=tokens_prompt, completion_tokens=completion_tokens, total_tokens=tokens_prompt + completion_tokens
-    )
-    return usage
+    return TOKEN_MAX[model] - count_message_tokens(messages, model) - 1
